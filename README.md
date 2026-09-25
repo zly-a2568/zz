@@ -51,4 +51,4 @@ gcc -std=c11 -Wall -O2 -o zz zip.c
 
 ## License
 
-Public Domain —— 随意使用。
+MIT License
