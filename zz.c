@@ -1,4 +1,5 @@
 #define _DEFAULT_SOURCE
+#include "huffman.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +10,50 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#define BLOCK 512
+
+typedef struct {
+  unsigned char *data;
+  size_t size;
+  size_t cap;
+} buffer;
+
+void buf_init(buffer *b) {
+  b->data = NULL;
+  b->size = 0;
+  b->cap = 0;
+}
+
+void buf_free(buffer *b) {
+  free(b->data);
+  buf_init(b);
+}
+
+int buf_reserve(buffer *b, size_t extra) {
+  if (b->cap - b->size >= extra)
+    return 0;
+  size_t want = b->size + extra;
+  size_t cap = b->cap ? b->cap : 65536;
+  while (cap < want)
+    cap *= 2;
+  unsigned char *p = realloc(b->data, cap);
+  if (!p)
+    return -1;
+  b->data = p;
+  b->cap = cap;
+  return 0;
+}
+
+int buf_append(buffer *b, const void *p, size_t n) {
+  if (n == 0)
+    return 0;
+  if (buf_reserve(b, n) != 0)
+    return -1;
+  memcpy(b->data + b->size, p, n);
+  b->size += n;
+  return 0;
+}
 
 typedef struct {
   char **items;
@@ -160,7 +205,7 @@ void walk(const char *base, const char *rel, path_list *out) {
   closedir(dir);
 }
 
-void pack(FILE *out_file, path_list *list, const char *root_path) {
+int pack(buffer *out, path_list *list, const char *root_path) {
   struct stat st_buf;
   for (size_t i = 0; i < list->count; i++) {
     header h;
@@ -192,36 +237,34 @@ void pack(FILE *out_file, path_list *list, const char *root_path) {
       }
     }
 
-    if (fwrite(&h, sizeof(header), 1, out_file) != 1) {
-      perror("fwrite");
+    if (buf_append(out, &h, sizeof(header)) != 0) {
+      fprintf(stderr, "pack: out of memory\n");
       if (in_file)
         fclose(in_file);
-      return;
+      return -1;
     }
 
     if (in_file) {
-      char buf[512];
+      char buf[BLOCK];
+      static const char padding[BLOCK] = {0};
       size_t n;
-      while ((n = fread(buf, 1, 512, in_file)) > 0) {
-        if (fwrite(buf, 1, n, out_file) != n) {
-          perror("fwrite");
+      while ((n = fread(buf, 1, sizeof(buf), in_file)) > 0) {
+        if (buf_append(out, buf, n) != 0 ||
+            (n < sizeof(buf) && buf_append(out, padding, BLOCK - n) != 0)) {
+          fprintf(stderr, "pack: out of memory\n");
           fclose(in_file);
-          return;
-        }
-        if (n < 512) {
-          char padding[512] = {0};
-          if (fwrite(padding, 1, 512 - n, out_file) != 512 - n) {
-            perror("fwrite");
-            fclose(in_file);
-            return;
-          }
+          return -1;
         }
       }
-      if (ferror(in_file))
+      if (ferror(in_file)) {
         perror("fread");
+        fclose(in_file);
+        return -1;
+      }
       fclose(in_file);
     }
   }
+  return 0;
 }
 
 static int path_is_safe(const char *p) {
@@ -241,7 +284,7 @@ static void restore_meta(const char *dst, const header *h) {
   chown(dst, h->uid, h->gid);
 }
 
-int unpack(FILE *in_file, const char *out_path) {
+int unpack(const unsigned char *data, size_t len, const char *out_path) {
   if (out_path == NULL || out_path[0] == '\0') {
     fprintf(stderr, "unpack: invalid output path\n");
     return -1;
@@ -249,14 +292,18 @@ int unpack(FILE *in_file, const char *out_path) {
   meta_list dirs;
   dirs.count = dirs.cap = 0;
   dirs.items = NULL;
+  size_t pos = 0;
   int ret = -1;
-  while (1) {
+  while (pos < len) {
+    if (len - pos < sizeof(header)) {
+      fprintf(stderr, "unpack: truncated archive\n");
+      goto out;
+    }
     header h;
-    init_header(&h);
-    if (fread(&h, sizeof(header), 1, in_file) == 0) {
-      if (feof(in_file))
-        break;
-      fprintf(stderr, "unpack: read error\n");
+    memcpy(&h, data + pos, sizeof(header));
+    pos += sizeof(header);
+    if (memchr(h.path, '\0', sizeof(h.path)) == NULL) {
+      fprintf(stderr, "unpack: unterminated path in archive\n");
       goto out;
     }
     if (!path_is_safe(h.path)) {
@@ -270,6 +317,11 @@ int unpack(FILE *in_file, const char *out_path) {
       snprintf(dst, sizeof(dst), "%s/%s", out_path, h.path);
 
     if (S_ISREG((mode_t)h.mode)) {
+      if (h.size > (uint64_t)(len - pos)) {
+        fprintf(stderr, "unpack: truncated archive\n");
+        goto out;
+      }
+      size_t padded = ((size_t)h.size + BLOCK - 1) / BLOCK * BLOCK;
       char *slash = strrchr(dst, '/');
       if (slash && slash != dst) {
         *slash = '\0';
@@ -281,22 +333,13 @@ int unpack(FILE *in_file, const char *out_path) {
         perror("fopen");
         goto out;
       }
-      char buf[512];
-      uint64_t remaining = h.size;
-      while (remaining > 0) {
-        if (fread(buf, 1, 512, in_file) == 0) {
-          fprintf(stderr, "unpack: truncated archive\n");
-          fclose(out_file);
-          goto out;
-        }
-        size_t to_write = remaining < 512 ? (size_t)remaining : 512;
-        if (fwrite(buf, 1, to_write, out_file) != to_write) {
-          perror("fwrite");
-          fclose(out_file);
-          goto out;
-        }
-        remaining -= to_write;
+      if (h.size > 0 &&
+          fwrite(data + pos, 1, (size_t)h.size, out_file) != (size_t)h.size) {
+        perror("fwrite");
+        fclose(out_file);
+        goto out;
       }
+      pos += padded;
       fclose(out_file);
       restore_meta(dst, &h);
     } else {
@@ -310,6 +353,30 @@ int unpack(FILE *in_file, const char *out_path) {
 out:
   meta_free(&dirs);
   return ret;
+}
+
+int read_file(const char *path, buffer *b) {
+  FILE *f = fopen(path, "rb");
+  if (f == NULL) {
+    perror("fopen");
+    return -1;
+  }
+  char chunk[65536];
+  size_t n;
+  while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+    if (buf_append(b, chunk, n) != 0) {
+      fprintf(stderr, "read_file: out of memory\n");
+      fclose(f);
+      return -1;
+    }
+  }
+  if (ferror(f)) {
+    perror("fread");
+    fclose(f);
+    return -1;
+  }
+  fclose(f);
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -337,15 +404,13 @@ int main(int argc, char *argv[]) {
     path_list l;
     paths_init(&l);
 
-    FILE *out_file = fopen(argv[3], "wb");
-    if (out_file == NULL) {
-      perror("fopen");
-      paths_free(&l);
-      return 1;
-    }
+    buffer raw;
+    buf_init(&raw);
+    int failed = 0;
+
     if (S_ISDIR(root_st.st_mode)) {
       walk(argv[2], "", &l);
-      pack(out_file, &l, argv[2]);
+      failed = pack(&raw, &l, argv[2]) != 0;
     } else {
       const char *base = strrchr(argv[2], '/');
       paths_add(&l, base ? base + 1 : argv[2]);
@@ -358,14 +423,41 @@ int main(int argc, char *argv[]) {
           memcpy(rootdir, argv[2], n);
           rootdir[n] = '\0';
         }
-        pack(out_file, &l, rootdir);
+        failed = pack(&raw, &l, rootdir) != 0;
       } else {
-        pack(out_file, &l, "./");
+        failed = pack(&raw, &l, "./") != 0;
       }
     }
-    fclose(out_file);
 
+    if (!failed) {
+      size_t need = encoded_size(raw.data, raw.size);
+      unsigned char *packed = need ? malloc(need) : NULL;
+      if (need == 0 || packed == NULL) {
+        fprintf(stderr, "pack: compression failed\n");
+        failed = 1;
+      } else if (encode(raw.data, raw.size, packed, need) != (int)need) {
+        fprintf(stderr, "pack: compression failed\n");
+        failed = 1;
+      } else {
+        FILE *out_file = fopen(argv[3], "wb");
+        if (out_file == NULL) {
+          perror("fopen");
+          failed = 1;
+        } else {
+          if (fwrite(packed, 1, need, out_file) != need)
+            perror("fwrite");
+          fclose(out_file);
+          fprintf(stderr, "packed %zu -> %zu bytes (%.1f%%)\n", raw.size, need,
+                  raw.size ? 100.0 * need / raw.size : 0.0);
+        }
+      }
+      free(packed);
+    }
+
+    buf_free(&raw);
     paths_free(&l);
+    if (failed)
+      return 1;
   } else {
     struct stat file_stat;
     if (stat(argv[2], &file_stat) != 0) {
@@ -377,13 +469,33 @@ int main(int argc, char *argv[]) {
       help();
       return 1;
     }
-    FILE *in_file = fopen(argv[2], "rb");
-    if (in_file == NULL) {
-      perror("fopen");
+    buffer packed;
+    buf_init(&packed);
+    if (read_file(argv[2], &packed) != 0) {
+      buf_free(&packed);
       return 1;
     }
-    int ret = unpack(in_file, argv[3]);
-    fclose(in_file);
+    if (packed.size < 1 || packed.data[0] != HUFF_MAGIC) {
+      fprintf(stderr, "unpack: not a .zz archive\n");
+      buf_free(&packed);
+      return 1;
+    }
+    size_t need = decoded_size(packed.data, packed.size);
+    unsigned char *raw = malloc(need + 1);
+    if (raw == NULL) {
+      fprintf(stderr, "unpack: out of memory\n");
+      buf_free(&packed);
+      return 1;
+    }
+    if (decode(packed.data, packed.size, raw, need) == (size_t)-1) {
+      fprintf(stderr, "unpack: corrupt archive\n");
+      free(raw);
+      buf_free(&packed);
+      return 1;
+    }
+    buf_free(&packed);
+    int ret = unpack(raw, need, argv[3]);
+    free(raw);
     if (ret != 0)
       return 1;
   }

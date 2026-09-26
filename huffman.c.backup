@@ -1,0 +1,177 @@
+#include "huffman.h"
+
+char *codes[256];
+
+void swap(int *a, int *b) {
+  int temp = *a;
+  *a = *b;
+  *b = temp;
+}
+
+void init_list(list *l, size_t ele_size) {
+  l->item = NULL;
+  l->size = 0;
+  l->element_size = ele_size;
+  l->capacity = 0;
+}
+
+int list_add(list *l, void *element) {
+  if (l->capacity <= l->size) {
+    list_resize(l, l->capacity > 0 ? l->capacity * 2 : 16);
+  }
+  l->item[l->size++] = element;
+  return 0;
+}
+
+int list_resize(list *l, size_t size) {
+  if (l->size >= size) {
+    return 0;
+  } else {
+    int new_capacity = size;
+    char **new_items =
+        (char **)realloc(l->item, new_capacity * l->element_size);
+    if (new_items == NULL)
+      return -1;
+    l->item = new_items;
+    l->capacity = new_capacity;
+  }
+  return 0;
+}
+
+int list_free(list *l) {
+  if (l != NULL) {
+    free(l->item);
+    free(l);
+  }
+  return 0;
+}
+
+int partition(int arr[], int low, int high) {
+  int pivot = arr[high];
+  int i = low - 1;
+
+  for (int j = low; j < high; j++) {
+    if (arr[j] <= pivot) {
+      i++;
+      swap(&arr[i], &arr[j]);
+    }
+  }
+
+  swap(&arr[i + 1], &arr[high]);
+  return i + 1;
+}
+
+void quick_sort(int arr[], int low, int high) {
+  if (low < high) {
+    int pi = partition(arr, low, high);
+
+    quick_sort(arr, low, pi - 1);
+    quick_sort(arr, pi + 1, high);
+  }
+}
+
+void select_node(huffman_tree tree, int end, int *p1, int *p2) {
+  int min1, min2;
+  int i = 1, j;
+  while (tree[i].parent != 0 && i <= end) {
+    i++;
+  }
+  *p1 = i;
+  min1 = tree[i].weight;
+  i++;
+  while (tree[i].parent != 0 && i <= end) {
+    i++;
+  }
+  if (tree[i].weight < min1) {
+    min2 = min1;
+    *p2 = *p1;
+    min1 = tree[i].weight;
+    *p1 = i;
+  } else {
+    min2 = tree[i].weight;
+    *p2 = i;
+  }
+  for (j = i + 1; j <= end; j++) {
+    if (tree[j].parent != 0)
+      continue;
+    if (tree[j].weight < min1) {
+      min2 = min1;
+      min1 = tree[j].weight;
+      *p2 = *p1;
+      *p1 = j;
+    } else if (tree[j].weight >= min1 && tree[j].weight < min2) {
+      min2 = tree[j].weight;
+      *p2 = j;
+    }
+  }
+}
+
+void build_tree(int *w, huffman_tree *tree, int n) {
+  int m, i;
+  if (n <= 1)
+    return;
+  m = 2 * n - 1;
+  *tree = (huffman_tree)malloc((m + 1) * sizeof(huffman_node));
+  huffman_tree p = *tree;
+  for (i = 1; i <= n; i++) {
+    (p + i)->weight = *(w + i - 1);
+    (p + i)->ch = (unsigned char)(i - 1);
+    (p + i)->parent = 0;
+    (p + i)->left = 0;
+    (p + i)->right = 0;
+  }
+  for (i = n + 1; i <= m; i++) {
+    (p + i)->weight = 0;
+    (p + i)->parent = 0;
+    (p + i)->left = 0;
+    (p + i)->right = 0;
+  }
+  for (i = n + 1; i <= m; i++) {
+    int p1, p2;
+    select_node(*tree, i - 1, &p1, &p2);
+    (*tree)[p1].parent = (*tree)[p2].parent = i;
+    (*tree)[i].left = p1;
+    (*tree)[i].right = p2;
+    (*tree)[i].weight = (*tree)[p1].weight + (*tree)[p2].weight;
+  }
+}
+
+/*void build_codes(huffman_tree *tree, char *path, int depth) {
+  if (!tree)
+    return;
+  if (!(*tree)[0]->left && !root->right) {
+    path[depth] = '\0';
+    codes[root->ch] = strdup(path);
+    return;
+  }
+  path[depth] = '0';
+  build_codes(root->left, path, depth + 1);
+  path[depth] = '1';
+  build_codes(root->right, path, depth + 1);
+}
+*/
+
+void encode(const char *src, char *dst) {
+  int weights[256];
+  memset(weights, 0, sizeof(weights));
+  for (int i = 0; i < strlen(src); i++) {
+    weights[(unsigned char)src[i]]++;
+  }
+  int available_count = 0, char_cursor = 0;
+  int cut_weights[256];
+  char chars[256];
+  memset(cut_weights, 0, sizeof(cut_weights));
+  memset(chars, 0, sizeof(chars));
+  for (int j = 0; j < 256; j++) {
+    if (weights[j] > 0) {
+      chars[available_count] = j;
+      cut_weights[available_count] = weights[j];
+      available_count++;
+    }
+  }
+  huffman_tree *tree;
+  build_tree(cut_weights, tree, available_count);
+  for (int a = 0; a < strlen(src); a++) {
+    huffman_node *node = (*tree);
+  }
+}
