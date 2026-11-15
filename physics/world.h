@@ -2,11 +2,13 @@
 #define WORLD_H
 #include "array.h"
 #include "shape.h"
+#include "aabb_tree.h"
 
 typedef struct{ 
   size_t body_count;
   array bodies;
   array contacts;
+  aabb_tree tree;
 }world;
 
 world* create_world();

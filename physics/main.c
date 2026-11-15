@@ -3,6 +3,7 @@
 #include "array.h"
 #include "node_modules/tigr.c/tigr/tigr.h"
 #include "world.h"
+#include "body.h"
 #include <math.h>
 #include <stdbool.h>
 #define TIGR_IMPLEMENTATION
@@ -12,6 +13,7 @@
 #include <linux/input.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <time.h>
 
 void demo1(int argc,char* argv[]){
 
@@ -29,7 +31,7 @@ void demo1(int argc,char* argv[]){
   Tigr *screen = tigrWindow(800, 1200, "physics", 0);
 
   float m1=20000000.0f;
-  float m2=10000.0f;
+  float m2=1000000.0f;
   float m3=1000.0f;
   vec2 v1={0,0};
   vec2 v2={30,140};
@@ -135,6 +137,87 @@ void demo2(int argc,char* argv[]){
     usleep(10000);
   }
   destroy_world(w);
+}
+void demo3(int argc,char* argv[]){
+  Tigr *screen = tigrWindow(800, 1200, "physics", 0);
+
+  world* w=create_world();
+  srand(time(NULL));
+
+  shape shape1=default_shape;
+  shape1.c.r=10;
+  for(int i=0;i<100;i++){
+    size_t bid = world_create_body(w);
+    world_set_body_position(w, bid, rand()%800, rand()%1200);
+    world_set_body_velocity(w, bid, rand()%600-300, rand()%600-300);
+    world_set_body_shape(w, bid, shape1);
+  }
+
+  while(!tigrClosed(screen)){
+
+    tigrClear(screen, tigrRGB(0x00, 0x00, 0x00));
+
+    world_update(w, 0.01);
+    for(int i=0;i<w->body_count;i++){
+      body* b=array_get(i,&w->bodies);
+      float ro1=b->rotation.z;
+      vec2 p1=VEC2_ADD(b->position, VEC2_MUL((vec2){cos(ro1),sin(ro1)},shape1.c.r));
+      if(b->position.x<0){
+        b->position.x=800.0f;
+      }
+      if(b->position.x>800.0f){
+        b->position.x=0.0f;
+      }
+      if(b->position.y<0){
+        b->position.y=1200.0f;
+      }
+      if(b->position.y>1200.0f){
+        b->position.y=0.0f;
+      }
+      tigrCircle(screen, b->position.x, b->position.y, b->shape.c.r, tigrRGB(0xFF, 0xFF,0xFF));
+      tigrLine(screen,b->position.x,b->position.y,p1.x,p1.y, tigrRGB(0xFF, 0xFF,0xFF));
+    }
+
+    tigrUpdate(screen);
+
+    usleep(10000);
+
+ }
+
+  destroy_world(w);
+
+}
+
+void demo4(int argc,char* argv[]){
+    world* w=create_world();
+  const float dt=0.01f;
+  Tigr *screen = tigrWindow(800, 1200, "physics", 0);
+  shape cs=default_shape; cs.c.r=20.0f;
+  size_t c=world_create_body(w);
+  world_set_body_shape(w,c,cs);
+  world_set_body_position(w,c,400.0f,610.0f);
+  world_set_body_velocity(w,c,0.0f,0.0f);
+
+  size_t c1=world_create_body(w);
+  world_set_body_shape(w,c1,cs);
+  world_set_body_position(w,c1,400.0f,600.0f);
+  world_set_body_velocity(w,c1,0.0f,0.0f);
+
+  while(!tigrClosed(screen)){
+    tigrClear(screen,tigrRGB(0x00, 0x00, 0x00));
+    body* b=array_get(c,&w->bodies);
+    world_update(w,dt);
+    for(int i=0;i<w->body_count;i++){
+      body* b=array_get(i,&w->bodies);
+      float ro1=b->rotation.z;
+      vec2 p1=VEC2_ADD(b->position, VEC2_MUL((vec2){cos(ro1),sin(ro1)},b->shape.c.r));
+      tigrCircle(screen, b->position.x, b->position.y, b->shape.c.r, tigrRGB(0xFF, 0xFF,0xFF));
+      tigrLine(screen,b->position.x,b->position.y,p1.x,p1.y, tigrRGB(0xFF, 0xFF,0xFF));
+    }
+    tigrUpdate(screen);
+    usleep(10000);
+  }
+  destroy_world(w); 
 }
 
 int main(int argc,char* argv[]){

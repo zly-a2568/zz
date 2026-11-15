@@ -56,7 +56,7 @@ int array_remove(size_t pos, array* a) {
 }
 
 int array_clear(array*a){
-  memset(a->data,0,a->size*a->elem_size);
+  if(a->data&&a->size) memset(a->data,0,a->size*a->elem_size);
   a->size=0;
   return 0;
 }
