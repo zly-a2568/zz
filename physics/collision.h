@@ -10,6 +10,10 @@ typedef struct contact_info{
     vec2 tangent;
     vec2 collision_point;
     float depth;
+    /* true when this same pair was also touching in the previous step. Resting
+     * contacts get no restitution so stacks settle instead of bouncing on the
+     * gravity that is added every step. */
+    bool resting;
 }contact_info ;
 
 int generate_contact_info(body*body_a,body*body_b,contact_info* info);
@@ -20,9 +24,9 @@ void solve_position(contact_info* info, float dt);
  * More iterations propagate support through a stack, so it stops sinking and
  * stops jittering. */
 #ifndef CONTACT_ITERATIONS
-#define CONTACT_ITERATIONS 16
+#define CONTACT_ITERATIONS 32
 #endif
 #ifndef CONTACT_POSITION_ITERATIONS
-#define CONTACT_POSITION_ITERATIONS 4
+#define CONTACT_POSITION_ITERATIONS 8
 #endif
 #endif //COLLISION_H

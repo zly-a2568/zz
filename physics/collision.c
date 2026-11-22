@@ -32,16 +32,31 @@ int generate_contact_info(body*body_a,body*body_b,contact_info* info){
         vec2 cp=c->position;
 
         float cr=c->shape.c.r;
-        vec2 lp1=VEC2_ADD(l->position, l->shape.s.p1);
-        vec2 lp2=VEC2_ADD(l->position, l->shape.s.p2);
-        if (point_segment_distance(lp1, lp2, cp)>cr)return -1;
-        vec2 v=point_segment_vector(lp1, lp2, cp);
-        info->collision_point=VEC2_SUB(cp,v);
+        vec2 lp1=body_to_world(l, l->shape.s.p1);
+        vec2 lp2=body_to_world(l, l->shape.s.p2);
+        vec2 v=point_segment_vector(lp1, lp2, cp);   /* segment -> circle centre */
+        float dist=VEC2_LENGTH(v);
+        if (dist>cr)return -1;
+        vec2 n;
+        if(dist>1e-6f){
+            n=VEC2_MUL(v, 1.0f/dist);
+            info->collision_point=VEC2_SUB(cp, v);   /* closest point on segment */
+        }else{
+            /* The circle centre lies exactly on the segment (a spinning segment
+             * sweeps through this). The contact normal is otherwise undefined,
+             * so fall back to the segment's perpendicular, choosing the side
+             * the circle is leaving so the push stays consistent. */
+            vec2 perp=VEC2_PERP(VEC2_NORMALIZE(VEC2_SUB(lp2,lp1)));
+            if(VEC2_DOT(VEC2_SUB(c->linear_velocity,l->linear_velocity),perp)>0.0f)
+                perp=VEC2_MUL(perp,-1.0f);
+            n=perp;
+            info->collision_point=cp;
+        }
         info->body_a=c;
         info->body_b=l;
-        info->depth=fabsf(cr-VEC2_LENGTH(v));
-        info->normal=VEC2_NORMALIZE(v);
-        info->tangent=VEC2_PERP(VEC2_NORMALIZE(v));
+        info->depth=cr-dist;
+        info->normal=n;
+        info->tangent=VEC2_PERP(n);
         return 0;
     }
     return -1;
@@ -85,10 +100,10 @@ int generate_contact_info(body*body_a,body*body_b,contact_info* info){
 void solve_contact(contact_info* info, float dt){
     (void)dt;
     vec2 n=info->normal;
-    float inv_ma=1/info->body_a->mass;
-    float inv_mb=1/info->body_b->mass;
-    float inv_ia=1/info->body_a->inertia;
-    float inv_ib=1/info->body_b->inertia;
+    float inv_ma=body_inv_mass(info->body_a);
+    float inv_mb=body_inv_mass(info->body_b);
+    float inv_ia=body_inv_inertia(info->body_a);
+    float inv_ib=body_inv_inertia(info->body_b);
     vec2 rA=VEC2_SUB(info->collision_point, info->body_a->position);
     vec2 rB=VEC2_SUB(info->collision_point, info->body_b->position);
 
@@ -103,9 +118,10 @@ void solve_contact(contact_info* info, float dt){
     float inv_meff_n = (inv_ma + inv_mb + inv_ia * rnA * rnA + inv_ib * rnB * rnB);
     if (inv_meff_n==0)return;
 
-    /* Only bounce for genuine impacts. Below the threshold treat the contact
-     * as resting (e = 0) so a stack can actually come to rest. */
-    float e = (vn < -CONTACT_RESTITUTION_THRESHOLD) ? CONTACT_RESTITUTION : 0.0f;
+    /* Only bounce for genuine impacts. Below the threshold, and for contacts
+     * that were already resting last step, treat the contact as resting
+     * (e = 0) so a stack can actually come to rest. */
+    float e = (!info->resting && vn < -CONTACT_RESTITUTION_THRESHOLD) ? CONTACT_RESTITUTION : 0.0f;
 
     /* normal impulse: drive the relative normal velocity to -e*vn.
      * clamp to >=0 so contacts only push, never pull. */
@@ -143,10 +159,10 @@ void solve_position(contact_info* info, float dt){
     vec2 n=info->normal;
     body* a=info->body_a;
     body* b=info->body_b;
-    float inv_ma=1/a->mass;
-    float inv_mb=1/b->mass;
-    float inv_ia=1/a->inertia;
-    float inv_ib=1/b->inertia;
+    float inv_ma=body_inv_mass(a);
+    float inv_mb=body_inv_mass(b);
+    float inv_ia=body_inv_inertia(a);
+    float inv_ib=body_inv_inertia(b);
     vec2 rA=VEC2_SUB(info->collision_point, a->position);
     vec2 rB=VEC2_SUB(info->collision_point, b->position);
 
